@@ -3,8 +3,12 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"github.com/nicolaeser/HermesManager/internal/command"
 	"github.com/nicolaeser/HermesManager/internal/config"
 	"github.com/nicolaeser/HermesManager/internal/fsutil"
 	"github.com/nicolaeser/HermesManager/internal/ports"
@@ -249,7 +253,13 @@ func (manager *Manager) Logs(ctx context.Context, tail int) error {
 	if tail < 1 {
 		tail = 100
 	}
-	return manager.Docker.Compose(ctx, true, "logs", "-f", "--tail", fmt.Sprintf("%d", tail), "hermes")
+	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := manager.Docker.Compose(runCtx, true, "logs", "-f", "--tail", fmt.Sprintf("%d", tail), "hermes")
+	if command.IsInterrupted(err) {
+		return nil
+	}
+	return err
 }
 
 func (manager *Manager) IsInstalled() bool {

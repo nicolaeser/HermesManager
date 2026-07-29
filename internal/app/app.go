@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/nicolaeser/HermesManager/internal/command"
 	"github.com/nicolaeser/HermesManager/internal/manager"
@@ -65,7 +67,18 @@ func (app *App) Run(ctx context.Context, args []string) error {
 		color = ui.ColorEnabled(output, *noColor)
 	}
 	terminal := ui.New(app.In, app.Out, app.Err, color, *assumeYes)
-	return app.dispatch(ctx, terminal, commandName, remaining)
+	switch commandName {
+	case "menu", "help", "--help", "-h", "version":
+		return app.dispatch(ctx, terminal, commandName, remaining)
+	default:
+		cmdCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		err := app.dispatch(cmdCtx, terminal, commandName, remaining)
+		if command.IsInterrupted(err) {
+			return nil
+		}
+		return err
+	}
 }
 
 func (app *App) runtime(root string, terminal *ui.UI) (runtime, error) {

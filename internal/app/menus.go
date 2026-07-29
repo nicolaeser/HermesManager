@@ -3,11 +3,25 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
+	"github.com/nicolaeser/HermesManager/internal/command"
 	"github.com/nicolaeser/HermesManager/internal/config"
 	"github.com/nicolaeser/HermesManager/internal/manager"
 	"github.com/nicolaeser/HermesManager/internal/ui"
 )
+
+func (rt runtime) withInterrupt(ctx context.Context, fn func(context.Context) error) error {
+	opCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := fn(opCtx)
+	if command.IsInterrupted(err) {
+		return fmt.Errorf("cancelled")
+	}
+	return err
+}
 
 func (rt runtime) mainMenu(ctx context.Context) error {
 	if !rt.manager.IsInstalled() {
@@ -28,12 +42,18 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		if !installNow {
 			return nil
 		}
-		result, err := rt.manager.Install(ctx, manager.InstallOptions{Pull: true, Start: true})
+		err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+			result, installErr := rt.manager.Install(opCtx, manager.InstallOptions{Pull: true, Start: true})
+			if installErr != nil {
+				return installErr
+			}
+			rt.ui.Success("Hermes installed")
+			rt.printInstallSummary(result.Config)
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		rt.ui.Success("Hermes installed")
-		rt.printInstallSummary(result.Config)
 	}
 
 	for {
@@ -58,27 +78,35 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 
 		switch choice {
 		case "1":
-			err = rt.withSuccess("Hermes started", rt.manager.Start(ctx))
+			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+				return rt.withSuccess("Hermes started", rt.manager.Start(opCtx))
+			})
 		case "2":
-			err = rt.withSuccess("Hermes stopped; persistent data was retained", rt.manager.Stop(ctx))
+			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+				return rt.withSuccess("Hermes stopped; persistent data was retained", rt.manager.Stop(opCtx))
+			})
 		case "3":
-			err = rt.withSuccess("Hermes restarted", rt.manager.Restart(ctx))
+			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+				return rt.withSuccess("Hermes restarted", rt.manager.Restart(opCtx))
+			})
 		case "4":
-			err = rt.statusCommand(ctx)
+			err = rt.withInterrupt(ctx, rt.statusCommand)
 		case "5":
 			err = rt.manager.Logs(ctx, 100)
 		case "6":
 			err = rt.dashboardCommand()
 		case "7":
-			err = rt.menuBackup(ctx)
+			err = rt.withInterrupt(ctx, rt.menuBackup)
 		case "8":
-			err = rt.menuRestore(ctx)
+			err = rt.withInterrupt(ctx, rt.menuRestore)
 		case "9":
-			err = rt.menuUpdate(ctx)
+			err = rt.withInterrupt(ctx, rt.menuUpdate)
 		case "10":
 			err = rt.ui.RequirePhrase("Rollback recreates Hermes with the previous image.", "ROLLBACK")
 			if err == nil {
-				err = rt.withSuccess("Previous image restored", rt.manager.Rollback(ctx))
+				err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+					return rt.withSuccess("Previous image restored", rt.manager.Rollback(opCtx))
+				})
 			}
 		case "11":
 			err = rt.safetyMenu(ctx)
@@ -112,30 +140,39 @@ func (rt runtime) safetyMenu(ctx context.Context) error {
 		}
 		switch choice {
 		case "1":
-			report := rt.manager.Doctor(ctx)
-			rt.printDoctor(report)
-			if !report.Healthy() {
-				err = fmt.Errorf("one or more doctor checks failed")
-			}
+			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+				report := rt.manager.Doctor(opCtx)
+				rt.printDoctor(report)
+				if !report.Healthy() {
+					return fmt.Errorf("one or more doctor checks failed")
+				}
+				return nil
+			})
 		case "2":
 			err = rt.ui.RequirePhrase("Resetting the password signs out every dashboard session.", "RESET")
 			if err == nil {
-				var password string
-				password, err = rt.manager.ResetDashboardPassword(ctx)
-				if err == nil {
+				err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+					password, resetErr := rt.manager.ResetDashboardPassword(opCtx)
+					if resetErr != nil {
+						return resetErr
+					}
 					rt.ui.Success("Dashboard password and session secret rotated")
 					rt.ui.KeyValue("New password", password)
-				}
+					return nil
+				})
 			}
 		case "3":
 			err = rt.menuPruneBackups()
 		case "4":
-			err = rt.menuExportInstance(ctx)
+			err = rt.withInterrupt(ctx, rt.menuExportInstance)
 		case "5":
-			_, err = rt.manager.Install(ctx, manager.InstallOptions{})
-			if err == nil {
+			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
+				if _, repairErr := rt.manager.Install(opCtx, manager.InstallOptions{}); repairErr != nil {
+					return repairErr
+				}
 				rt.ui.Success("Managed files repaired; persistent data was untouched")
-			}
+				return nil
+			})
 		case "0":
 			return nil
 		default:
