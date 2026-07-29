@@ -14,6 +14,9 @@ import (
 	"github.com/nicolaeser/HermesManager/internal/state"
 )
 
+// ProgressFunc reports a human-readable step while a long operation runs.
+type ProgressFunc func(format string, args ...any)
+
 type Manager struct {
 	Paths       stack.Paths
 	ConfigStore config.Store
@@ -23,6 +26,8 @@ type Manager struct {
 	Docker      docker.Client
 	Out         io.Writer
 	Err         io.Writer
+	// Progress is optional; when set, multi-step operations report each stage.
+	Progress ProgressFunc
 }
 
 func New(paths stack.Paths, runner command.Runner, in io.Reader, out, errOut io.Writer) *Manager {
@@ -35,6 +40,12 @@ func New(paths stack.Paths, runner command.Runner, in io.Reader, out, errOut io.
 		Docker:      docker.New(paths, runner, in, out, errOut),
 		Out:         out,
 		Err:         errOut,
+	}
+}
+
+func (manager *Manager) progress(format string, args ...any) {
+	if manager.Progress != nil {
+		manager.Progress(format, args...)
 	}
 }
 

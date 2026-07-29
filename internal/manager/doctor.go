@@ -153,11 +153,12 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 	for _, directory := range []struct {
 		name string
 		path string
+		hint string
 	}{
-		{"Manager directory", manager.Paths.Manager},
-		{"Data directory", manager.Paths.Data},
-		{"Workspace", manager.Paths.Workspace},
-		{"Backups", manager.Paths.Backups},
+		{"Manager directory", manager.Paths.Manager, ""},
+		{"Hermes data (HERMES_HOME)", manager.Paths.Data, "critical: config, sessions, memories; survives image updates"},
+		{"Project workspace (host)", manager.Paths.Workspace, "optional /workspace mount; not Hermes core state"},
+		{"Backups", manager.Paths.Backups, "host archive directory for hermes backup/import"},
 	} {
 		name, path := directory.name, directory.path
 		info, statErr := os.Stat(path)
@@ -171,9 +172,19 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 		}
 		if writeErr := probeWritable(path); writeErr != nil {
 			report.add(CheckFail, name, "not writable: "+writeErr.Error())
+		} else if directory.hint != "" {
+			report.add(CheckPass, name, path+" — "+directory.hint)
 		} else {
 			report.add(CheckPass, name, path)
 		}
+	}
+
+	// Official Hermes Agent workspace lives under HERMES_HOME after first boot.
+	agentWorkspace := manager.Paths.HermesDataWorkspace()
+	if info, err := os.Stat(agentWorkspace); err == nil && info.IsDir() {
+		report.add(CheckPass, "Hermes agent workspace", agentWorkspace+" — created by Hermes under data/ (official layout)")
+	} else {
+		report.add(CheckWarn, "Hermes agent workspace", agentWorkspace+" not present yet (created on first Hermes boot)")
 	}
 
 	checkPrivateMode(&report, "Manager permissions", manager.Paths.Manager, 0o700)
@@ -194,10 +205,16 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 			safe = safe && !strings.Contains(composeText, forbidden)
 		}
 		if safe {
-			report.add(CheckPass, "Compose mount policy", "exactly data, workspace, and backups are bind-mounted")
+			report.add(CheckPass, "Compose mount policy", "bind mounts only: data→/opt/data, workspace→/workspace, backups→/backups")
 		} else {
 			report.add(CheckFail, "Compose mount policy", "generated file does not match the three-mount safety contract; run install to repair")
 		}
+	}
+
+	if manager.hermesStatePresent() {
+		report.add(CheckPass, "Hermes state on host", "durable files found under data/ (update will preserve them)")
+	} else {
+		report.add(CheckWarn, "Hermes state on host", "no config/sessions yet under data/; empty until first successful start")
 	}
 
 	if available, diskErr := availableBytes(manager.Paths.Root); diskErr != nil {
@@ -239,6 +256,12 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 		return report
 	}
 	report.add(CheckPass, "Hermes container", "running")
+
+	if err := manager.verifyContainerBinds(ctx); err != nil {
+		report.add(CheckFail, "Live bind mounts", err.Error())
+	} else {
+		report.add(CheckPass, "Live bind mounts", "container /opt/data, /workspace, /backups match host instance paths")
+	}
 
 	health, err := manager.DashboardHealth(ctx)
 	if err != nil {

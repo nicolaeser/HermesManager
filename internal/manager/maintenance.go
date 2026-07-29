@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nicolaeser/HermesManager/internal/config"
 	"github.com/nicolaeser/HermesManager/internal/fsutil"
 )
 
@@ -125,6 +126,19 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 		return err
 	}
 	defer releaseLock(lock, &operationErr)
+
+	// Updates only recreate the container image. Host bind sources under the
+	// instance folder (especially data/) are never removed by this manager.
+	manager.progress("Checking host data directories and container bind mounts")
+	hadState, err := manager.preUpdateSnapshot()
+	if err != nil {
+		return err
+	}
+	if err := manager.verifyContainerBinds(ctx); err != nil {
+		return fmt.Errorf("pre-update mount check failed (refusing to update with unsafe mounts): %w", err)
+	}
+
+	manager.progress("Creating pre-update safety backup")
 	if _, err := manager.backupUnlocked(ctx, "pre-update"); err != nil {
 		return fmt.Errorf("create pre-update backup: %w", err)
 	}
@@ -132,6 +146,7 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 	if err != nil {
 		return err
 	}
+	manager.progress("Recording previous image for automatic rollback: %s", previousImage)
 	managerState, err := manager.StateStore.Load()
 	if err != nil {
 		return err
@@ -149,6 +164,7 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 	if err := manager.saveAndPrepare(cfg); err != nil {
 		return err
 	}
+	manager.progress("Pulling the newest Hermes image (host data is not touched)")
 	if err := manager.Docker.Compose(ctx, false, "pull", "hermes"); err != nil {
 		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
 		if rollbackErr != nil {
@@ -156,6 +172,9 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 		}
 		return fmt.Errorf("pull updated image: %w; the previous image was restored", err)
 	}
+	// force-recreate replaces the container only. Bind mounts keep host data/.
+	// Never use "down -v" or remove host directories here.
+	manager.progress("Recreating the container with the new image (preserving bind mounts)")
 	if err := manager.Docker.Compose(ctx, false, "up", "-d", "--force-recreate", "--remove-orphans", "hermes"); err != nil {
 		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
 		return joinedUpdateError("recreate updated container", err, rollbackErr)
@@ -164,10 +183,21 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
 		return joinedUpdateError("updated container is not running", nil, rollbackErr)
 	}
+	manager.progress("Verifying bind mounts and host Hermes data after recreate")
+	if err := manager.verifyContainerBinds(ctx); err != nil {
+		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
+		return joinedUpdateError("post-update mount check failed", err, rollbackErr)
+	}
+	if err := manager.assertDataSurvived(hadState); err != nil {
+		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
+		return joinedUpdateError("post-update data check failed", err, rollbackErr)
+	}
+	manager.progress("Checking Hermes version inside the new container")
 	if _, err := manager.Docker.ExecOutput(ctx, "version"); err != nil {
 		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
 		return joinedUpdateError("updated Hermes version check failed", err, rollbackErr)
 	}
+	manager.progress("Waiting for dashboard health")
 	if _, err := manager.waitForDashboard(ctx, dashboardReadyTimeout); err != nil {
 		rollbackErr := manager.pinAndRecreate(ctx, previousImage)
 		return joinedUpdateError("updated dashboard health check failed", err, rollbackErr)
@@ -177,6 +207,7 @@ func (manager *Manager) Update(ctx context.Context) (operationErr error) {
 		return err
 	}
 	_ = manager.StateStore.Log("update", "previous_image="+previousImage+" result=success")
+	manager.progress("Update finished; host data/, workspace/, and backups/ were left in place")
 	return nil
 }
 
@@ -249,14 +280,77 @@ func (manager *Manager) pinAndRecreate(ctx context.Context, image string) error 
 	if err := manager.saveAndPrepare(cfg); err != nil {
 		return err
 	}
+	// Recreate container only — never remove volumes or host directories.
 	if err := manager.Docker.Compose(ctx, false, "up", "-d", "--force-recreate", "hermes"); err != nil {
 		cfg.PinnedImage = previousPin
 		_ = manager.saveAndPrepare(cfg)
 		return fmt.Errorf("recreate rollback image: %w", err)
 	}
+	if err := manager.verifyContainerBinds(ctx); err != nil {
+		return fmt.Errorf("rollback image started but bind mounts are wrong: %w", err)
+	}
 	if _, err := manager.waitForDashboard(ctx, dashboardReadyTimeout); err != nil {
 		return fmt.Errorf("rollback image started but dashboard health verification failed: %w", err)
 	}
+	return nil
+}
+
+// SetBindAddress switches published ports between localhost (127.0.0.1) and
+// all interfaces (0.0.0.0), regenerates Compose, and recreates the container
+// when it is running. Host data is never removed.
+func (manager *Manager) SetBindAddress(ctx context.Context, public bool) (operationErr error) {
+	if err := manager.RequireInstalled(); err != nil {
+		return err
+	}
+	if err := manager.Docker.CheckDaemon(ctx); err != nil {
+		return err
+	}
+	lock, err := manager.operationLock("set-bind-address")
+	if err != nil {
+		return err
+	}
+	defer releaseLock(lock, &operationErr)
+
+	cfg, err := manager.ConfigStore.Load()
+	if err != nil {
+		return err
+	}
+	want := config.DefaultBindAddress
+	if public {
+		want = config.PublicBindAddress
+	}
+	if cfg.BindAddress == want {
+		manager.progress("Bind address already %s", want)
+		return nil
+	}
+
+	manager.progress("Updating bind address %s → %s", cfg.BindAddress, want)
+	cfg.BindAddress = want
+	if err := manager.saveAndPrepare(cfg); err != nil {
+		return err
+	}
+
+	running, err := manager.Docker.ServiceRunningStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if !running {
+		manager.progress("Compose updated; container is stopped — start it to apply the new ports")
+		_ = manager.StateStore.Log("set-bind-address", "bind="+want+" running=false result=success")
+		return nil
+	}
+
+	manager.progress("Recreating container so port publish changes take effect")
+	if err := manager.Docker.Compose(ctx, false, "up", "-d", "--force-recreate", "hermes"); err != nil {
+		return fmt.Errorf("recreate with new bind address: %w", err)
+	}
+	if err := manager.verifyContainerBinds(ctx); err != nil {
+		return fmt.Errorf("bind address applied but mount check failed: %w", err)
+	}
+	if _, err := manager.waitForDashboard(ctx, dashboardReadyTimeout); err != nil {
+		return fmt.Errorf("bind address applied but dashboard health check failed: %w", err)
+	}
+	_ = manager.StateStore.Log("set-bind-address", "bind="+want+" result=success")
 	return nil
 }
 

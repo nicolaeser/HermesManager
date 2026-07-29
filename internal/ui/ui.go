@@ -65,8 +65,9 @@ func ColorEnabled(out *os.File, disabled bool) bool {
 
 func (ui *UI) Banner(version, root string) {
 	p := ui.Palette
+	displayVersion := "v" + strings.TrimPrefix(strings.TrimSpace(version), "v")
 	fmt.Fprintf(ui.Out, "\n%s╭────────────────────────────────────────────────────────────╮%s\n", p.Accent, p.Reset)
-	fmt.Fprintf(ui.Out, "%s│%s %sHermes Manager%s  %-39s%s│%s\n", p.Accent, p.Reset, p.Bold, p.Reset, "v"+version, p.Accent, p.Reset)
+	fmt.Fprintf(ui.Out, "%s│%s %sHermes Manager%s  %-39s%s│%s\n", p.Accent, p.Reset, p.Bold, p.Reset, displayVersion, p.Accent, p.Reset)
 	fmt.Fprintf(ui.Out, "%s│%s %-58s %s│%s\n", p.Accent, p.Reset, truncate("Stack  "+root, 58), p.Accent, p.Reset)
 	fmt.Fprintf(ui.Out, "%s╰────────────────────────────────────────────────────────────╯%s\n", p.Accent, p.Reset)
 }
@@ -159,6 +160,11 @@ func (ui *UI) RequirePhrase(message, phrase string) error {
 
 func (ui *UI) Info(format string, args ...any) {
 	fmt.Fprintf(ui.Out, "%s•%s %s\n", ui.Palette.Accent, ui.Palette.Reset, fmt.Sprintf(format, args...))
+}
+
+// Step reports an in-progress operation so long installs/updates do not go silent.
+func (ui *UI) Step(format string, args ...any) {
+	fmt.Fprintf(ui.Out, "%s→%s %s\n", ui.Palette.Accent, ui.Palette.Reset, fmt.Sprintf(format, args...))
 }
 
 func (ui *UI) Success(format string, args ...any) {

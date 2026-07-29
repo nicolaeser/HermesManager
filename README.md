@@ -61,14 +61,21 @@ Run `hermes-manager help` for the complete command list.
 /srv/hermes/main/
 ├── compose.yaml
 ├── .manager/
-├── data/
-├── workspace/
-└── backups/
+├── data/                 # HERMES_HOME → /opt/data (critical)
+│   └── workspace/        # created by Hermes Agent itself
+├── workspace/            # optional project files → /workspace
+└── backups/              # hermes backup/import archives
 ```
 
-`data`, `workspace`, and `backups` are mounted from the host. Hermes executables
-stay inside the Docker image, so image updates do not overwrite persistent
-files.
+| Host path | Container | Role |
+|-----------|-----------|------|
+| `data/` | `/opt/data` | Official Hermes state (config, sessions, memories, agent workspace). **Must keep for updates.** |
+| `workspace/` | `/workspace` | Optional project directory. Not Hermes core state; often empty. |
+| `backups/` | `/backups` | Host archives for `hermes backup` / import. |
+
+Hermes executables live in the image. **Update only recreates the container**
+(bind mounts stay). The manager never runs `docker compose down -v` and never
+deletes `data/` during update.
 
 ## Safety
 
