@@ -1,0 +1,299 @@
+package manager
+
+import (
+	"archive/zip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/nicolaeser/HermesManager/internal/stack"
+)
+
+const instanceExportSchema = 1
+
+type instanceExportManifest struct {
+	SchemaVersion     int       `json:"schema_version"`
+	CreatedAt         time.Time `json:"created_at"`
+	InstanceName      string    `json:"instance_name"`
+	TrackedImage      string    `json:"tracked_image"`
+	RunningImage      string    `json:"running_image"`
+	HermesBackup      string    `json:"hermes_backup"`
+	IncludesWorkspace bool      `json:"includes_workspace"`
+	ContainsSecrets   bool      `json:"contains_secrets"`
+}
+
+func (manager *Manager) ExportInstance(ctx context.Context, includeWorkspace bool) (archive string, operationErr error) {
+	if err := manager.ensureRunning(ctx); err != nil {
+		return "", err
+	}
+	lock, err := manager.operationLock("export-instance")
+	if err != nil {
+		return "", err
+	}
+	defer releaseLock(lock, &operationErr)
+
+	hermesBackup, err := manager.backupUnlocked(ctx, "instance-export")
+	if err != nil {
+		return "", fmt.Errorf("create embedded Hermes backup: %w", err)
+	}
+	cfg, err := manager.ConfigStore.Load()
+	if err != nil {
+		return "", err
+	}
+	runningImage, err := manager.currentImageReference(ctx)
+	if err != nil {
+		return "", err
+	}
+	filename := fmt.Sprintf("hermes-instance-%s-%s.zip", SanitizeLabel(cfg.Name), time.Now().UTC().Format("20060102T150405.000Z"))
+	destination := filepath.Join(manager.Paths.Backups, filename)
+	manifest := instanceExportManifest{
+		SchemaVersion:     instanceExportSchema,
+		CreatedAt:         time.Now().UTC(),
+		InstanceName:      cfg.Name,
+		TrackedImage:      cfg.Image,
+		RunningImage:      runningImage,
+		HermesBackup:      filepath.Base(hermesBackup),
+		IncludesWorkspace: includeWorkspace,
+		ContainsSecrets:   true,
+	}
+	if err := writeInstanceExport(manager.Paths, manifest, hermesBackup, destination, includeWorkspace); err != nil {
+		return "", err
+	}
+	if err := validateZip(destination); err != nil {
+		return "", fmt.Errorf("validate instance export: %w", err)
+	}
+
+	if err := os.Remove(hermesBackup); err != nil {
+		fmt.Fprintf(manager.Err, "warning: instance export succeeded but temporary backup could not be removed: %v\n", err)
+	}
+	managerState, err := manager.StateStore.Load()
+	if err == nil {
+		managerState.LastBackup = filename
+		managerState.LastOperation = "export-instance"
+		_ = manager.StateStore.Save(managerState)
+	}
+	_ = manager.StateStore.Log("export-instance", fmt.Sprintf("file=%s workspace=%t contains_secrets=true result=success", filename, includeWorkspace))
+	return destination, nil
+}
+
+func writeInstanceExport(paths stack.Paths, manifest instanceExportManifest, hermesBackup, destination string, includeWorkspace bool) (resultErr error) {
+	temporary, err := os.CreateTemp(paths.Backups, ".hermes-instance-export-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary instance export: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	removeTemporary := true
+	defer func() {
+		_ = temporary.Close()
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err := temporary.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect temporary instance export: %w", err)
+	}
+
+	archive := zip.NewWriter(temporary)
+	manifestJSON, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode instance export manifest: %w", err)
+	}
+	manifestJSON = append(manifestJSON, '\n')
+	if err := addBytesToZip(archive, "manifest.json", manifestJSON, 0o600); err != nil {
+		return err
+	}
+	recoveryGuide := `Hermes Manager disaster-recovery export
+
+WARNING: This archive contains dashboard credentials in .manager/secrets.env.
+Store it like a password vault export.
+
+Contents:
+- hermes/ contains a complete Hermes backup for hermes-manager restore.
+- workspace/ contains the host workspace when requested.
+- .manager/ contains identity, credentials, state, and operation history.
+- generated/compose.yaml is included for auditing only. Regenerate Compose on
+  the recovery host because its absolute bind-mount paths belong to the old host.
+`
+	if err := addBytesToZip(archive, "RECOVERY.txt", []byte(recoveryGuide), 0o600); err != nil {
+		return err
+	}
+
+	for _, item := range []struct {
+		source   string
+		name     string
+		required bool
+	}{
+		{paths.Config, ".manager/instance.json", true},
+		{paths.Secrets, ".manager/secrets.env", true},
+		{paths.State, ".manager/state.json", false},
+		{paths.OperationsLog, ".manager/operations.log", false},
+		{paths.Compose, "generated/compose.yaml", true},
+		{hermesBackup, "hermes/" + filepath.Base(hermesBackup), true},
+	} {
+		if err := addFileToZip(archive, item.source, item.name); err != nil {
+			if !item.required && os.IsNotExist(unwrapFileError(err)) {
+				continue
+			}
+			return err
+		}
+	}
+	if includeWorkspace {
+		if err := addWorkspaceToZip(archive, paths.Workspace); err != nil {
+			return err
+		}
+	}
+	if err := archive.Close(); err != nil {
+		return fmt.Errorf("finalize instance export ZIP: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync instance export: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close instance export: %w", err)
+	}
+	if err := validateZip(temporaryPath); err != nil {
+		return fmt.Errorf("validate temporary instance export: %w", err)
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return fmt.Errorf("publish instance export: %w", err)
+	}
+	removeTemporary = false
+	return nil
+}
+
+func addBytesToZip(archive *zip.Writer, name string, content []byte, mode fs.FileMode) error {
+	header := &zip.FileHeader{
+		Name:   name,
+		Method: zip.Deflate,
+	}
+	header.SetMode(mode)
+	header.SetModTime(time.Now().UTC())
+	writer, err := archive.CreateHeader(header)
+	if err != nil {
+		return fmt.Errorf("create export member %s: %w", name, err)
+	}
+	if _, err := writer.Write(content); err != nil {
+		return fmt.Errorf("write export member %s: %w", name, err)
+	}
+	return nil
+}
+
+func addFileToZip(archive *zip.Writer, source, name string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return fmt.Errorf("inspect export source %s: %w", source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("export source %s is not a regular file", source)
+	}
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return fmt.Errorf("create ZIP header for %s: %w", source, err)
+	}
+	header.Name = name
+	header.Method = zip.Deflate
+	if strings.HasSuffix(strings.ToLower(name), ".zip") {
+		header.Method = zip.Store
+	}
+	writer, err := archive.CreateHeader(header)
+	if err != nil {
+		return fmt.Errorf("create export member %s: %w", name, err)
+	}
+	file, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("open export source %s: %w", source, err)
+	}
+	defer file.Close()
+	if _, err := io.Copy(writer, file); err != nil {
+		return fmt.Errorf("copy export source %s: %w", source, err)
+	}
+	return nil
+}
+
+func addWorkspaceToZip(archive *zip.Writer, workspace string) error {
+	if err := addBytesToZip(archive, "workspace/", nil, fs.ModeDir|0o755); err != nil {
+		return err
+	}
+	return filepath.WalkDir(workspace, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == workspace {
+			return nil
+		}
+		relative, err := filepath.Rel(workspace, path)
+		if err != nil {
+			return err
+		}
+		if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("workspace entry escapes root: %s", path)
+		}
+		name := "workspace/" + filepath.ToSlash(relative)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = name
+		switch {
+		case info.IsDir():
+			header.Name += "/"
+			header.Method = zip.Store
+			_, err = archive.CreateHeader(header)
+			return err
+		case info.Mode()&os.ModeSymlink != 0:
+			header.Method = zip.Store
+			writer, createErr := archive.CreateHeader(header)
+			if createErr != nil {
+				return createErr
+			}
+			target, readErr := os.Readlink(path)
+			if readErr != nil {
+				return readErr
+			}
+			_, err = io.WriteString(writer, target)
+			return err
+		case info.Mode().IsRegular():
+			header.Method = zip.Deflate
+			writer, createErr := archive.CreateHeader(header)
+			if createErr != nil {
+				return createErr
+			}
+			file, openErr := os.Open(path)
+			if openErr != nil {
+				return openErr
+			}
+			_, copyErr := io.Copy(writer, file)
+			closeErr := file.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			return closeErr
+		default:
+			return fmt.Errorf("workspace contains unsupported special file: %s", path)
+		}
+	})
+}
+
+func unwrapFileError(err error) error {
+	for err != nil {
+		if pathError, ok := err.(*os.PathError); ok {
+			return pathError.Err
+		}
+		unwrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return err
+		}
+		err = unwrapper.Unwrap()
+	}
+	return nil
+}

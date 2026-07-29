@@ -1,0 +1,88 @@
+# Hermes Manager
+
+Hermes Manager is a small Go CLI for installing and managing
+[NousResearch Hermes Agent](https://github.com/nousresearch/hermes-agent) with
+Docker Compose.
+
+## Requirements
+
+- Linux or macOS
+- Docker with Docker Compose
+
+## Install the command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolaeser/HermesManager/main/install.sh | sh
+```
+
+For a user-only installation:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolaeser/HermesManager/main/install.sh | sh -s -- --user
+```
+
+## Install Hermes
+
+```bash
+hermes-manager install /srv/hermes/main
+hermes-manager dashboard /srv/hermes/main
+```
+
+Hermes listens on `127.0.0.1` by default. Use `--bind-all` only when it should
+listen on `0.0.0.0`:
+
+```bash
+hermes-manager install --bind-all --dashboard-port 9120 --api-port 8650 /srv/hermes/main
+```
+
+Use a separate folder and different ports for every additional instance.
+
+## Common commands
+
+```bash
+hermes-manager start /srv/hermes/main
+hermes-manager stop /srv/hermes/main
+hermes-manager restart /srv/hermes/main
+hermes-manager status /srv/hermes/main
+hermes-manager logs /srv/hermes/main
+hermes-manager backup /srv/hermes/main
+hermes-manager update /srv/hermes/main
+hermes-manager rollback /srv/hermes/main
+hermes-manager doctor /srv/hermes/main
+hermes-manager menu /srv/hermes/main
+hermes-manager self-update
+```
+
+Run `hermes-manager help` for the complete command list.
+
+## Instance files
+
+```text
+/srv/hermes/main/
+├── compose.yaml
+├── .manager/
+├── data/
+├── workspace/
+└── backups/
+```
+
+`data`, `workspace`, and `backups` are mounted from the host. Hermes executables
+stay inside the Docker image, so image updates do not overwrite persistent
+files.
+
+## Safety
+
+- Dashboard and API ports are localhost-only unless `--bind-all` is explicit.
+- Only `data`, `workspace`, and `backups` are mounted into the container.
+- Backups and manager credentials are stored with owner-only permissions.
+- Instance exports contain dashboard credentials and must be stored securely.
+- Report vulnerabilities through GitHub private vulnerability reporting.
+
+## Build from source
+
+```bash
+make check
+make build
+```
+
+The binary is written to `build/hermes-manager`.
