@@ -68,6 +68,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		if fsutil.FileExists(manager.Paths.Compose) {
 			return result, fmt.Errorf("%s already exists but is not owned by Hermes Manager", manager.Paths.Compose)
 		}
+		manager.progress("Creating instance metadata and selecting free ports")
 		bindAddress := config.DefaultBindAddress
 		if options.BindAll {
 			bindAddress = config.PublicBindAddress
@@ -82,6 +83,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 			return result, err
 		}
 	} else {
+		manager.progress("Repairing existing instance (name and ports stay stable)")
 		cfg, err = manager.ConfigStore.Load()
 		if err != nil {
 			return result, err
@@ -94,6 +96,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		}
 	}
 
+	manager.progress("Writing secrets and generating Compose (data/ + optional workspace/ + backups/)")
 	values, _, err := manager.SecretStore.LoadOrCreate(cfg.DashboardUsername)
 	if err != nil {
 		return result, err
@@ -101,6 +104,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 	if err := manager.Generator.Prepare(cfg, values); err != nil {
 		return result, err
 	}
+	manager.progress("Checking Docker CLI and Compose file")
 	if err := manager.Docker.CheckCLI(ctx); err != nil {
 		return result, err
 	}
@@ -113,11 +117,13 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		}
 	}
 	if options.Pull {
+		manager.progress("Pulling Hermes image (this can take a while)")
 		if err := manager.Docker.Compose(ctx, false, "pull", "hermes"); err != nil {
 			return result, fmt.Errorf("pull Hermes image: %w", err)
 		}
 	}
 	if options.Start {
+		manager.progress("Starting Hermes container")
 		upArgs := []string{"up", "-d"}
 		if !options.Pull {
 			upArgs = append(upArgs, "--pull", "never")
@@ -125,6 +131,9 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		upArgs = append(upArgs, "hermes")
 		if err := manager.Docker.Compose(ctx, false, upArgs...); err != nil {
 			return result, fmt.Errorf("start Hermes: %w", err)
+		}
+		if err := manager.verifyContainerBinds(ctx); err != nil {
+			return result, fmt.Errorf("container started but bind mounts are wrong: %w", err)
 		}
 	}
 	_ = manager.StateStore.Log("install", fmt.Sprintf("created=%t result=success", created))

@@ -56,9 +56,19 @@ func (OSRunner) Run(ctx context.Context, request Request) (Result, error) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if request.Capture {
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+		// Buffer for callers that need the text; also stream live when writers are set.
+		if request.Stdout != nil {
+			cmd.Stdout = io.MultiWriter(request.Stdout, &stdout)
+		} else {
+			cmd.Stdout = &stdout
+		}
+		if request.Stderr != nil {
+			cmd.Stderr = io.MultiWriter(request.Stderr, &stderr)
+		} else {
+			cmd.Stderr = &stderr
+		}
 	} else {
+		// Stream only — never buffer (logs -f and other long jobs).
 		cmd.Stdout = request.Stdout
 		cmd.Stderr = request.Stderr
 	}

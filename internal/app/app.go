@@ -86,10 +86,12 @@ func (app *App) runtime(root string, terminal *ui.UI) (runtime, error) {
 	if err != nil {
 		return runtime{}, err
 	}
+	mgr := manager.New(paths, app.Runner, app.In, app.Out, app.Err)
+	mgr.Progress = terminal.Step
 	return runtime{
 		app:     app,
 		paths:   paths,
-		manager: manager.New(paths, app.Runner, app.In, app.Out, app.Err),
+		manager: mgr,
 		ui:      terminal,
 	}, nil
 }
@@ -167,6 +169,7 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 		return err
 	}
 	terminal.Info("Preparing Hermes instance at %s", rt.paths.Root)
+	terminal.Info("Hermes state will live under data/ (HERMES_HOME). Project workspace/ is optional.")
 	if *bindAll {
 		terminal.Warn("Dashboard and API ports will listen on every host interface (0.0.0.0).")
 	}
@@ -276,6 +279,7 @@ func (rt runtime) simpleCommand(ctx context.Context, commandName string) error {
 	case "status":
 		return rt.statusCommand(ctx)
 	case "update":
+		rt.ui.Info("Update recreates the container image only; host data/ is bind-mounted and kept.")
 		confirmed, err := rt.ui.Confirm("Create a backup, pull the newest image, and update Hermes?", true)
 		if err != nil {
 			return err
@@ -283,7 +287,7 @@ func (rt runtime) simpleCommand(ctx context.Context, commandName string) error {
 		if !confirmed {
 			return fmt.Errorf("update cancelled")
 		}
-		return rt.withSuccess("Update completed and verified", rt.manager.Update(ctx))
+		return rt.withSuccess("Update completed and verified; host data was preserved", rt.manager.Update(ctx))
 	case "rollback":
 		if err := rt.ui.RequirePhrase("Rollback recreates Hermes with the previously recorded image.", "ROLLBACK"); err != nil {
 			return err
@@ -309,9 +313,11 @@ func (rt runtime) statusCommand(ctx context.Context) error {
 	rt.ui.KeyValue("Dashboard", status.DashboardURL)
 	rt.ui.KeyValue("Listening on", fmt.Sprintf("%s (dashboard %d, API %d)", status.BindAddress, status.DashboardPort, status.APIPort))
 	rt.ui.KeyValue("API host port", status.APIPort)
-	rt.ui.KeyValue("Hermes data", status.Data)
-	rt.ui.KeyValue("Workspace", status.Workspace)
+	rt.ui.KeyValue("Hermes data", status.Data+"  (HERMES_HOME → /opt/data; critical, survives updates)")
+	rt.ui.KeyValue("Agent workspace", rt.paths.HermesDataWorkspace()+"  (inside data/, created by Hermes)")
+	rt.ui.KeyValue("Project workspace", status.Workspace+"  (optional host dir → /workspace)")
 	rt.ui.KeyValue("Backups", status.Backups)
+	rt.ui.Info("Updates recreate the container image only; host data/, workspace/, and backups/ are bind-mounted and kept.")
 	if status.Version != "" {
 		rt.ui.KeyValue("Version", status.Version)
 	}

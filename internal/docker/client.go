@@ -52,20 +52,14 @@ func (client Client) Compose(ctx context.Context, interactive bool, args ...stri
 		Directory: client.Paths.Root,
 		Stdout:    client.Out,
 		Stderr:    client.Err,
-		Capture:   !interactive,
+		// Always stream so pull/up progress is visible live. Capture is only
+		// used by ComposeOutput for text that the manager needs to parse.
+		Capture: false,
 	}
 	if interactive {
 		request.Stdin = client.In
 	}
-	result, err := client.Runner.Run(ctx, request)
-	if !interactive {
-		if result.Stdout != "" {
-			_, _ = io.WriteString(client.Out, result.Stdout)
-		}
-		if result.Stderr != "" {
-			_, _ = io.WriteString(client.Err, result.Stderr)
-		}
-	}
+	_, err := client.Runner.Run(ctx, request)
 	return err
 }
 
@@ -89,20 +83,12 @@ func (client Client) Docker(ctx context.Context, interactive bool, args ...strin
 		Directory: client.Paths.Root,
 		Stdout:    client.Out,
 		Stderr:    client.Err,
-		Capture:   !interactive,
+		Capture:   false,
 	}
 	if interactive {
 		request.Stdin = client.In
 	}
-	result, err := client.Runner.Run(ctx, request)
-	if !interactive {
-		if result.Stdout != "" {
-			_, _ = io.WriteString(client.Out, result.Stdout)
-		}
-		if result.Stderr != "" {
-			_, _ = io.WriteString(client.Err, result.Stderr)
-		}
-	}
+	_, err := client.Runner.Run(ctx, request)
 	return err
 }
 

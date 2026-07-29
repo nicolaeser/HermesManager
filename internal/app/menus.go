@@ -133,6 +133,8 @@ func (rt runtime) safetyMenu(ctx context.Context) error {
 			{Key: "3", Label: "Prune automatic backups", Description: "Manual backups and instance exports are retained"},
 			{Key: "4", Label: "Export complete instance", Description: "Hermes data, workspace, credentials, and recovery metadata"},
 			{Key: "5", Label: "Repair managed files", Description: "Regenerate Compose without changing data or ports"},
+			{Key: "6", Label: "Toggle network bind", Description: "Switch dashboard/API between 127.0.0.1 and 0.0.0.0 (recreates container)"},
+			{Key: "7", Label: "Explain storage layout", Description: "data/ vs workspace/ and what updates preserve"},
 			{Key: "0", Label: "Back"},
 		})
 		if err != nil {
@@ -173,6 +175,11 @@ func (rt runtime) safetyMenu(ctx context.Context) error {
 				rt.ui.Success("Managed files repaired; persistent data was untouched")
 				return nil
 			})
+		case "6":
+			err = rt.withInterrupt(ctx, rt.menuToggleBind)
+		case "7":
+			rt.printStorageLayout()
+			err = nil
 		case "0":
 			return nil
 		default:
@@ -269,6 +276,8 @@ func (rt runtime) menuRestore(ctx context.Context) error {
 }
 
 func (rt runtime) menuUpdate(ctx context.Context) error {
+	rt.ui.Info("Update pulls a new image and recreates the container only.")
+	rt.ui.Info("Host folders data/, workspace/, and backups/ stay bind-mounted and are not deleted.")
 	confirmed, err := rt.ui.Confirm("Create a backup, pull the newest image, and update Hermes?", true)
 	if err != nil {
 		return err
@@ -276,7 +285,69 @@ func (rt runtime) menuUpdate(ctx context.Context) error {
 	if !confirmed {
 		return nil
 	}
-	return rt.withSuccess("Update completed and verified", rt.manager.Update(ctx))
+	return rt.withSuccess("Update completed and verified; host data was preserved", rt.manager.Update(ctx))
+}
+
+func (rt runtime) menuToggleBind(ctx context.Context) error {
+	cfg, err := rt.manager.ConfigStore.Load()
+	if err != nil {
+		return err
+	}
+	currentlyPublic := cfg.BindAddress == config.PublicBindAddress
+	rt.ui.Section("Network bind")
+	rt.ui.KeyValue("Current", cfg.BindAddress)
+	if currentlyPublic {
+		rt.ui.Warn("Ports are published on every host interface (0.0.0.0).")
+	} else {
+		rt.ui.Info("Ports are localhost-only (127.0.0.1). Use an SSH tunnel for remote access.")
+	}
+
+	var public bool
+	if currentlyPublic {
+		confirmed, confErr := rt.ui.Confirm("Switch to localhost-only (127.0.0.1)?", true)
+		if confErr != nil {
+			return confErr
+		}
+		if !confirmed {
+			return nil
+		}
+		public = false
+	} else {
+		if err := rt.ui.RequirePhrase(
+			"Publishing on 0.0.0.0 exposes the dashboard and API on every interface. Protect with firewall/VPN/proxy.",
+			"BIND-ALL",
+		); err != nil {
+			return err
+		}
+		public = true
+	}
+	if err := rt.manager.SetBindAddress(ctx, public); err != nil {
+		return err
+	}
+	cfg, err = rt.manager.ConfigStore.Load()
+	if err != nil {
+		return err
+	}
+	rt.ui.Success("Bind address is now %s", cfg.BindAddress)
+	rt.ui.KeyValue("Dashboard", fmt.Sprintf("http://127.0.0.1:%d", cfg.DashboardPort))
+	return nil
+}
+
+func (rt runtime) printStorageLayout() {
+	rt.ui.Section("Storage layout")
+	rt.ui.KeyValue("Instance root", rt.paths.Root)
+	rt.ui.KeyValue("Hermes data", rt.paths.Data)
+	rt.ui.Info("Mounted at /opt/data (HERMES_HOME). Official Hermes stores config, sessions, memories, skills, and data/workspace here. This is the only critical store for image updates.")
+	rt.ui.KeyValue("Agent workspace", rt.paths.HermesDataWorkspace())
+	rt.ui.Info("Created by Hermes Agent under HERMES_HOME — not the host project folder.")
+	rt.ui.KeyValue("Project workspace", rt.paths.Workspace)
+	rt.ui.Info("Optional host directory mounted at /workspace for project files. Empty by default; not required by official Hermes Docker.")
+	rt.ui.KeyValue("Backups", rt.paths.Backups)
+	rt.ui.Info("Host archive directory used by hermes backup/import.")
+	rt.ui.Section("What updates preserve")
+	rt.ui.Info("Update = backup → pull image → force-recreate container → verify mounts, version, dashboard.")
+	rt.ui.Info("Host data/, workspace/, and backups/ are bind mounts and are never removed by update.")
+	rt.ui.Info("On failure the previous image is pinned and recreated automatically when possible.")
 }
 
 func (rt runtime) printInstallSummary(cfg config.Config) {
@@ -285,6 +356,8 @@ func (rt runtime) printInstallSummary(cfg config.Config) {
 	rt.ui.KeyValue("Dashboard", fmt.Sprintf("http://127.0.0.1:%d", cfg.DashboardPort))
 	rt.ui.KeyValue("Listening on", cfg.BindAddress)
 	rt.ui.KeyValue("API host port", cfg.APIPort)
-	rt.ui.KeyValue("Persistent data", rt.paths.Data)
+	rt.ui.KeyValue("Hermes data", rt.paths.Data+"  (critical HERMES_HOME)")
+	rt.ui.KeyValue("Project workspace", rt.paths.Workspace+"  (optional)")
+	rt.ui.Info("Hermes Agent state lives under data/. The host workspace/ folder is optional project files.")
 	rt.ui.Info("Run 'hermes-manager dashboard %q' to show the generated login.", rt.paths.Root)
 }
