@@ -95,7 +95,7 @@ func Render(cfg config.Config) []byte {
 	var output strings.Builder
 	output.WriteString("services:\n")
 	output.WriteString("  hermes-init:\n")
-	output.WriteString("    image: busybox:1.37\n")
+	output.WriteString("    image: busybox:latest\n")
 	output.WriteString("    restart: \"no\"\n")
 	output.WriteString("    volumes:\n")
 	output.WriteString("      - ./data:/opt/data\n")
