@@ -35,19 +35,31 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 			return err
 		}
 		rt = rebound
-		installNow, err := rt.ui.Confirm("Install and start Hermes here?", true)
+		installNow, err := rt.ui.Confirm("Install Hermes here?", true)
 		if err != nil {
 			return err
 		}
 		if !installNow {
 			return nil
 		}
+		startNow, err := rt.ui.Confirm("Start the container now?", true)
+		if err != nil {
+			return err
+		}
 		err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
-			result, installErr := rt.manager.Install(opCtx, manager.InstallOptions{Pull: true, Start: true})
+			result, installErr := rt.manager.Install(opCtx, manager.InstallOptions{
+				Pull:  true,
+				Start: startNow,
+			})
 			if installErr != nil {
 				return installErr
 			}
-			rt.ui.Success("Hermes installed")
+			if startNow {
+				rt.ui.Success("Hermes installed and started")
+			} else {
+				rt.ui.Success("Hermes installed (not started)")
+				rt.ui.Info("Adjust compose.yaml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
+			}
 			rt.printInstallSummary(result.Config)
 			return nil
 		})

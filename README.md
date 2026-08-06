@@ -28,6 +28,17 @@ hermes-manager install /srv/hermes/main
 hermes-manager dashboard /srv/hermes/main
 ```
 
+To prepare an instance without starting it yet (for compose tweaks or
+migration), use `--no-start`:
+
+```bash
+hermes-manager install --no-start /srv/hermes/main
+hermes-manager start /srv/hermes/main
+```
+
+In the interactive menu, install and start are separate prompts: confirm install
+with `Y`, then answer `y` or `n` for starting immediately.
+
 Hermes listens on `127.0.0.1` by default. Use `--bind-all` only when it should
 listen on `0.0.0.0`:
 

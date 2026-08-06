@@ -173,6 +173,7 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 	if *bindAll {
 		terminal.Warn("Dashboard and API ports will listen on every host interface (0.0.0.0).")
 	}
+	start := !*noStart
 	result, err := rt.manager.Install(ctx, manager.InstallOptions{
 		Name:          *name,
 		Image:         *image,
@@ -180,15 +181,21 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 		APIPort:       *apiPort,
 		BindAll:       *bindAll,
 		Pull:          !*noPull,
-		Start:         !*noStart,
+		Start:         start,
 	})
 	if err != nil {
 		return err
 	}
-	if result.Created {
-		terminal.Success("Hermes installed")
-	} else {
-		terminal.Success("Hermes installation repaired")
+	switch {
+	case result.Created && start:
+		terminal.Success("Hermes installed and started")
+	case result.Created:
+		terminal.Success("Hermes installed (not started)")
+		terminal.Info("Adjust compose.yaml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
+	case start:
+		terminal.Success("Hermes installation repaired and started")
+	default:
+		terminal.Success("Hermes installation repaired (not started)")
 	}
 	rt.printInstallSummary(result.Config)
 	return nil
@@ -419,6 +426,7 @@ Install options:
 
 Examples:
   hermes-manager install /srv/hermes/work
+  hermes-manager install --no-start /srv/hermes/work
   hermes-manager install --dashboard-port 9120 /srv/hermes/second
   cd /srv/hermes/work && hermes-manager dashboard
   hermes-manager update /srv/hermes/work
