@@ -13,6 +13,11 @@ import (
 	"github.com/nicolaeser/HermesManager/internal/stack"
 )
 
+const (
+	runtimeUID = 10000
+	runtimeGID = 10000
+)
+
 type Generator struct {
 	Paths stack.Paths
 }
@@ -89,24 +94,29 @@ func (generator Generator) Prepare(cfg config.Config, secretValues secrets.Value
 func Render(cfg config.Config) []byte {
 	var output strings.Builder
 	output.WriteString("services:\n")
+	output.WriteString("  hermes-init:\n")
+	output.WriteString("    image: busybox:1.37\n")
+	output.WriteString("    restart: \"no\"\n")
+	output.WriteString("    volumes:\n")
+	output.WriteString("      - ./data:/opt/data\n")
+	output.WriteString("      - ./workspace:/workspace\n")
+	output.WriteString("      - ./backups:/backups\n")
+	fmt.Fprintf(&output, "    command: [\"chown\", \"-R\", \"%d:%d\", \"/opt/data\", \"/workspace\", \"/backups\"]\n", runtimeUID, runtimeGID)
 	output.WriteString("  hermes:\n")
 	fmt.Fprintf(&output, "    image: %s\n", yamlQuote(cfg.EffectiveImage()))
 	fmt.Fprintf(&output, "    container_name: %s\n", yamlQuote(cfg.Name))
 	output.WriteString("    restart: unless-stopped\n")
+	output.WriteString("    depends_on:\n")
+	output.WriteString("      hermes-init:\n")
+	output.WriteString("        condition: service_completed_successfully\n")
 	output.WriteString("    command: [\"gateway\", \"run\"]\n")
-	output.WriteString("    working_dir: /workspace\n")
-	output.WriteString("    stop_grace_period: 1m\n")
 	output.WriteString("    env_file:\n")
 	output.WriteString("      - ./.manager/secrets.env\n")
 	output.WriteString("    environment:\n")
-	fmt.Fprintf(&output, "      HERMES_UID: %s\n", yamlQuote(strconv.Itoa(os.Getuid())))
-	fmt.Fprintf(&output, "      HERMES_GID: %s\n", yamlQuote(strconv.Itoa(os.Getgid())))
 	output.WriteString("      HERMES_HOME: \"/opt/data\"\n")
-	output.WriteString("      HERMES_WRITE_SAFE_ROOT: \"/opt/data\"\n")
 	output.WriteString("      HERMES_DASHBOARD: \"1\"\n")
 	output.WriteString("      HERMES_DASHBOARD_HOST: \"0.0.0.0\"\n")
 	output.WriteString("      HERMES_DASHBOARD_PORT: \"9119\"\n")
-	output.WriteString("      HERMES_GATEWAY_BOOTSTRAP_STATE: \"running\"\n")
 	output.WriteString("    ports:\n")
 	fmt.Fprintf(&output, "      - %s\n", yamlQuote(fmt.Sprintf("%s:%d:9119", cfg.BindAddress, cfg.DashboardPort)))
 	fmt.Fprintf(&output, "      - %s\n", yamlQuote(fmt.Sprintf("%s:%d:8642", cfg.BindAddress, cfg.APIPort)))
@@ -120,11 +130,6 @@ func Render(cfg config.Config) []byte {
 	output.WriteString("      timeout: 5s\n")
 	output.WriteString("      retries: 3\n")
 	output.WriteString("      start_period: 45s\n")
-	output.WriteString("    logging:\n")
-	output.WriteString("      driver: json-file\n")
-	output.WriteString("      options:\n")
-	output.WriteString("        max-size: \"10m\"\n")
-	output.WriteString("        max-file: \"3\"\n")
 	return []byte(output.String())
 }
 
@@ -135,12 +140,11 @@ func SyncManaged(existing []byte, cfg config.Config) []byte {
 		text = strings.TrimSuffix(text, "\n")
 	}
 	lines := strings.Split(text, "\n")
-	uid := yamlQuote(strconv.Itoa(os.Getuid()))
-	gid := yamlQuote(strconv.Itoa(os.Getgid()))
 	image := yamlQuote(cfg.EffectiveImage())
 	name := yamlQuote(cfg.Name)
 	dashboardPort := yamlQuote(fmt.Sprintf("%s:%d:9119", cfg.BindAddress, cfg.DashboardPort))
 	apiPort := yamlQuote(fmt.Sprintf("%s:%d:8642", cfg.BindAddress, cfg.APIPort))
+	currentService := ""
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -148,15 +152,19 @@ func SyncManaged(existing []byte, cfg config.Config) []byte {
 			continue
 		}
 		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		indentLen := len(indent)
+		if indentLen == 2 && strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "-") {
+			currentService = strings.TrimSuffix(trimmed, ":")
+			continue
+		}
+		if currentService != "hermes" {
+			continue
+		}
 		switch {
 		case strings.HasPrefix(trimmed, "image:"):
 			lines[i] = indent + "image: " + image
 		case strings.HasPrefix(trimmed, "container_name:"):
 			lines[i] = indent + "container_name: " + name
-		case strings.HasPrefix(trimmed, "HERMES_UID:"):
-			lines[i] = indent + "HERMES_UID: " + uid
-		case strings.HasPrefix(trimmed, "HERMES_GID:"):
-			lines[i] = indent + "HERMES_GID: " + gid
 		case isPublishedPort(trimmed, 9119):
 			lines[i] = indent + "- " + dashboardPort
 		case isPublishedPort(trimmed, 8642):
