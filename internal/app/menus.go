@@ -42,14 +42,20 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		if !installNow {
 			return nil
 		}
+		rebuildOnStart, err := rt.ui.Confirm("Rebuild docker-compose.yml on every start?", false)
+		if err != nil {
+			return err
+		}
 		startNow, err := rt.ui.Confirm("Start the container now?", true)
 		if err != nil {
 			return err
 		}
 		err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
 			result, installErr := rt.manager.Install(opCtx, manager.InstallOptions{
-				Pull:  true,
-				Start: startNow,
+				Pull:                     true,
+				Start:                    startNow,
+				RebuildComposeOnStart:    rebuildOnStart,
+				HasRebuildComposeOnStart: true,
 			})
 			if installErr != nil {
 				return installErr
@@ -91,7 +97,7 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		switch choice {
 		case "1":
 			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
-				return rt.withSuccess("Hermes started", rt.manager.Start(opCtx))
+				return rt.withSuccess("Hermes started", rt.manager.Start(opCtx, manager.StartOptions{}))
 			})
 		case "2":
 			err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
@@ -368,8 +374,14 @@ func (rt runtime) printInstallSummary(cfg config.Config) {
 	rt.ui.KeyValue("Dashboard", fmt.Sprintf("http://127.0.0.1:%d", cfg.DashboardPort))
 	rt.ui.KeyValue("Listening on", cfg.BindAddress)
 	rt.ui.KeyValue("API host port", cfg.APIPort)
+	if cfg.RebuildComposeOnStart {
+		rt.ui.KeyValue("Compose on start", "rebuild full file")
+	} else {
+		rt.ui.KeyValue("Compose on start", "preserve custom edits")
+	}
 	rt.ui.KeyValue("Hermes data", rt.paths.Data+"  (critical HERMES_HOME)")
 	rt.ui.KeyValue("Project workspace", rt.paths.Workspace+"  (optional)")
 	rt.ui.Info("Hermes Agent state lives under data/. The host workspace/ folder is optional project files.")
 	rt.ui.Info("Run 'hermes-manager dashboard %q' to show the generated login.", rt.paths.Root)
+	rt.ui.Info("Force a one-shot compose rebuild with: hermes-manager start --rebuild %q", rt.paths.Root)
 }

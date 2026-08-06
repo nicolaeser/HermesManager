@@ -165,6 +165,9 @@ func (client Client) composeArguments(args ...string) []string {
 		"--project-directory", client.Paths.Root,
 		"-f", client.composeFile(),
 	}
+	if fsutil.FileExists(client.Paths.ComposeOverride()) {
+		base = append(base, "-f", client.Paths.ComposeOverride())
+	}
 	return append(base, args...)
 }
 

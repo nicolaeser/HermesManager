@@ -118,7 +118,9 @@ func (app *App) dispatch(ctx context.Context, terminal *ui.UI, commandName strin
 			return err
 		}
 		return rt.mainMenu(ctx)
-	case "start", "stop", "restart", "status", "update", "rollback":
+	case "start":
+		return app.startCommand(ctx, terminal, args)
+	case "stop", "restart", "status", "update", "rollback":
 		root, err := oneFolder(args)
 		if err != nil {
 			return fmt.Errorf("usage: hermes-manager %s [FOLDER]", commandName)
@@ -157,6 +159,7 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 	bindAll := flags.Bool("bind-all", false, "publish dashboard and API on 0.0.0.0 instead of localhost")
 	noPull := flags.Bool("no-pull", false, "do not pull the image")
 	noStart := flags.Bool("no-start", false, "do not start the container")
+	rebuildOnStart := flags.Bool("rebuild-on-start", false, "regenerate docker-compose.yml on every start")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -174,7 +177,7 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 		terminal.Warn("Dashboard and API ports will listen on every host interface (0.0.0.0).")
 	}
 	start := !*noStart
-	result, err := rt.manager.Install(ctx, manager.InstallOptions{
+	options := manager.InstallOptions{
 		Name:          *name,
 		Image:         *image,
 		DashboardPort: *dashboardPort,
@@ -182,7 +185,14 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 		BindAll:       *bindAll,
 		Pull:          !*noPull,
 		Start:         start,
+	}
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "rebuild-on-start" {
+			options.HasRebuildComposeOnStart = true
+			options.RebuildComposeOnStart = *rebuildOnStart
+		}
 	})
+	result, err := rt.manager.Install(ctx, options)
 	if err != nil {
 		return err
 	}
@@ -275,10 +285,26 @@ func oneFolder(args []string) (string, error) {
 	}
 }
 
+func (app *App) startCommand(ctx context.Context, terminal *ui.UI, args []string) error {
+	flags := flag.NewFlagSet("start", flag.ContinueOnError)
+	flags.SetOutput(app.Err)
+	rebuild := flags.Bool("rebuild", false, "regenerate docker-compose.yml from the managed template before start")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	root, err := oneFolder(flags.Args())
+	if err != nil {
+		return fmt.Errorf("usage: hermes-manager start [--rebuild] [FOLDER]")
+	}
+	rt, err := app.runtime(root, terminal)
+	if err != nil {
+		return err
+	}
+	return rt.withSuccess("Hermes started", rt.manager.Start(ctx, manager.StartOptions{Rebuild: *rebuild}))
+}
+
 func (rt runtime) simpleCommand(ctx context.Context, commandName string) error {
 	switch commandName {
-	case "start":
-		return rt.withSuccess("Hermes started", rt.manager.Start(ctx))
 	case "stop":
 		return rt.withSuccess("Hermes stopped; persistent data was retained", rt.manager.Stop(ctx))
 	case "restart":
@@ -319,6 +345,11 @@ func (rt runtime) statusCommand(ctx context.Context) error {
 	}
 	rt.ui.KeyValue("Dashboard", status.DashboardURL)
 	rt.ui.KeyValue("Listening on", fmt.Sprintf("%s (dashboard %d, API %d)", status.BindAddress, status.DashboardPort, status.APIPort))
+	if status.RebuildComposeOnStart {
+		rt.ui.KeyValue("Compose on start", "rebuild full docker-compose.yml")
+	} else {
+		rt.ui.KeyValue("Compose on start", "preserve custom edits (use start --rebuild to force)")
+	}
 	rt.ui.KeyValue("API host port", status.APIPort)
 	rt.ui.KeyValue("Hermes data", status.Data+"  (HERMES_HOME → /opt/data; critical, survives updates)")
 	rt.ui.KeyValue("Agent workspace", rt.paths.HermesDataWorkspace()+"  (inside data/, created by Hermes)")
@@ -393,7 +424,7 @@ Usage:
 
 Commands:
   install [options] [folder]     Create or repair an instance
-  start [folder]                 Start the instance
+  start [--rebuild] [folder]     Start the instance
   stop [folder]                  Stop it without deleting data
   restart [folder]               Restart the container
   status [folder]                Show ports, paths, image, and container state
@@ -423,10 +454,16 @@ Install options:
   --bind-all                     Explicitly publish ports on 0.0.0.0
   --no-pull                      Generate without pulling the image
   --no-start                     Generate without starting the container
+  --rebuild-on-start             Rebuild docker-compose.yml on every start
+
+Start options:
+  --rebuild                      Force-regenerate docker-compose.yml this start
 
 Examples:
   hermes-manager install /srv/hermes/work
   hermes-manager install --no-start /srv/hermes/work
+  hermes-manager install --rebuild-on-start /srv/hermes/work
+  hermes-manager start --rebuild /srv/hermes/work
   hermes-manager install --dashboard-port 9120 /srv/hermes/second
   cd /srv/hermes/work && hermes-manager dashboard
   hermes-manager update /srv/hermes/work

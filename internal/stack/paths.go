@@ -48,6 +48,10 @@ func (p Paths) LegacyCompose() string {
 	return filepath.Join(p.Root, "compose.yaml")
 }
 
+func (p Paths) ComposeOverride() string {
+	return filepath.Join(p.Root, "docker-compose.override.yml")
+}
+
 func (p Paths) HermesDataWorkspace() string {
 	return filepath.Join(p.Data, "workspace")
 }

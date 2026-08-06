@@ -76,7 +76,7 @@ func (manager *Manager) Prepare(ctx context.Context, validate bool) error {
 	if err != nil {
 		return err
 	}
-	if err := manager.Generator.Prepare(cfg, values); err != nil {
+	if err := manager.Generator.Prepare(cfg, values, false); err != nil {
 		return err
 	}
 	if validate {
@@ -98,7 +98,7 @@ func (manager *Manager) saveAndPrepare(cfg config.Config) error {
 	if err := manager.ConfigStore.Save(cfg); err != nil {
 		return err
 	}
-	return manager.Generator.Prepare(cfg, values)
+	return manager.Generator.Prepare(cfg, values, false)
 }
 
 func (manager *Manager) ensureRunning(ctx context.Context) error {

@@ -17,7 +17,7 @@ type Generator struct {
 	Paths stack.Paths
 }
 
-func (generator Generator) Prepare(cfg config.Config, secretValues secrets.Values) error {
+func (generator Generator) Prepare(cfg config.Config, secretValues secrets.Values, force bool) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -45,19 +45,44 @@ func (generator Generator) Prepare(cfg config.Config, secretValues secrets.Value
 		}
 	}
 
-	content := Render(cfg)
-	existing, err := os.ReadFile(generator.Paths.Compose)
-	if err == nil && bytes.Equal(existing, content) {
-		_ = os.Remove(generator.Paths.LegacyCompose())
+	desired := Render(cfg)
+	existingPath := ""
+	if fsutil.FileExists(generator.Paths.Compose) {
+		existingPath = generator.Paths.Compose
+	} else if fsutil.FileExists(generator.Paths.LegacyCompose()) {
+		existingPath = generator.Paths.LegacyCompose()
+	}
+
+	if existingPath == "" {
+		if err := fsutil.AtomicWriteFile(generator.Paths.Compose, desired, 0o600); err != nil {
+			return fmt.Errorf("write Compose file: %w", err)
+		}
 		return nil
 	}
-	if err != nil && !os.IsNotExist(err) {
+
+	existing, err := os.ReadFile(existingPath)
+	if err != nil {
 		return fmt.Errorf("read Compose file: %w", err)
 	}
-	if err := fsutil.AtomicWriteFile(generator.Paths.Compose, content, 0o600); err != nil {
-		return fmt.Errorf("write Compose file: %w", err)
+
+	var content []byte
+	switch {
+	case force:
+		content = desired
+	case bytes.Equal(existing, desired):
+		content = existing
+	default:
+		content = SyncManaged(existing, cfg)
 	}
-	_ = os.Remove(generator.Paths.LegacyCompose())
+
+	if existingPath != generator.Paths.Compose || !bytes.Equal(existing, content) {
+		if err := fsutil.AtomicWriteFile(generator.Paths.Compose, content, 0o600); err != nil {
+			return fmt.Errorf("write Compose file: %w", err)
+		}
+	}
+	if existingPath == generator.Paths.LegacyCompose() || fsutil.FileExists(generator.Paths.LegacyCompose()) {
+		_ = os.Remove(generator.Paths.LegacyCompose())
+	}
 	return nil
 }
 
@@ -101,6 +126,65 @@ func Render(cfg config.Config) []byte {
 	output.WriteString("        max-size: \"10m\"\n")
 	output.WriteString("        max-file: \"3\"\n")
 	return []byte(output.String())
+}
+
+func SyncManaged(existing []byte, cfg config.Config) []byte {
+	text := string(existing)
+	endsWithNL := strings.HasSuffix(text, "\n")
+	if endsWithNL {
+		text = strings.TrimSuffix(text, "\n")
+	}
+	lines := strings.Split(text, "\n")
+	uid := yamlQuote(strconv.Itoa(os.Getuid()))
+	gid := yamlQuote(strconv.Itoa(os.Getgid()))
+	image := yamlQuote(cfg.EffectiveImage())
+	name := yamlQuote(cfg.Name)
+	dashboardPort := yamlQuote(fmt.Sprintf("%s:%d:9119", cfg.BindAddress, cfg.DashboardPort))
+	apiPort := yamlQuote(fmt.Sprintf("%s:%d:8642", cfg.BindAddress, cfg.APIPort))
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		switch {
+		case strings.HasPrefix(trimmed, "image:"):
+			lines[i] = indent + "image: " + image
+		case strings.HasPrefix(trimmed, "container_name:"):
+			lines[i] = indent + "container_name: " + name
+		case strings.HasPrefix(trimmed, "HERMES_UID:"):
+			lines[i] = indent + "HERMES_UID: " + uid
+		case strings.HasPrefix(trimmed, "HERMES_GID:"):
+			lines[i] = indent + "HERMES_GID: " + gid
+		case isPublishedPort(trimmed, 9119):
+			lines[i] = indent + "- " + dashboardPort
+		case isPublishedPort(trimmed, 8642):
+			lines[i] = indent + "- " + apiPort
+		}
+	}
+
+	out := strings.Join(lines, "\n")
+	if endsWithNL {
+		out += "\n"
+	}
+	return []byte(out)
+}
+
+func isPublishedPort(trimmed string, containerPort int) bool {
+	if !strings.HasPrefix(trimmed, "-") {
+		return false
+	}
+	value := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+	value = strings.Trim(value, `"'`)
+	if strings.Contains(value, "://") {
+		return false
+	}
+	suffix := fmt.Sprintf(":%d", containerPort)
+	if !strings.HasSuffix(value, suffix) {
+		return false
+	}
+	return strings.Count(value, ":") >= 1
 }
 
 func ensureDirectory(path string, mode os.FileMode) error {

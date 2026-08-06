@@ -24,14 +24,15 @@ const (
 )
 
 type Config struct {
-	SchemaVersion     int    `json:"schema_version"`
-	Name              string `json:"name"`
-	Image             string `json:"image"`
-	PinnedImage       string `json:"pinned_image,omitempty"`
-	BindAddress       string `json:"bind_address"`
-	DashboardPort     int    `json:"dashboard_port"`
-	APIPort           int    `json:"api_port"`
-	DashboardUsername string `json:"dashboard_username"`
+	SchemaVersion         int    `json:"schema_version"`
+	Name                  string `json:"name"`
+	Image                 string `json:"image"`
+	PinnedImage           string `json:"pinned_image,omitempty"`
+	BindAddress           string `json:"bind_address"`
+	DashboardPort         int    `json:"dashboard_port"`
+	APIPort               int    `json:"api_port"`
+	DashboardUsername     string `json:"dashboard_username"`
+	RebuildComposeOnStart bool   `json:"rebuild_compose_on_start"`
 }
 
 type Store struct {

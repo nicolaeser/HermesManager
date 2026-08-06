@@ -71,6 +71,7 @@ Run `hermes-manager help` for the complete command list.
 ```text
 /srv/hermes/main/
 ├── docker-compose.yml
+├── docker-compose.override.yml   # optional user customizations
 ├── .manager/
 ├── data/                 # HERMES_HOME → /opt/data (critical)
 │   └── workspace/        # created by Hermes Agent itself
@@ -83,6 +84,35 @@ Run `hermes-manager help` for the complete command list.
 | `data/` | `/opt/data` | Official Hermes state (config, sessions, memories, agent workspace). **Must keep for updates.** |
 | `workspace/` | `/workspace` | Optional project directory. Not Hermes core state; often empty. |
 | `backups/` | `/backups` | Host archives for `hermes backup` / import. |
+
+### Custom volumes
+
+Put extra mounts in `docker-compose.override.yml` (recommended). The manager
+merges that file on every compose command and never regenerates it:
+
+```yaml
+services:
+  hermes:
+    volumes:
+      - /home/user/.openclaw:/openclaw:ro
+```
+
+Edits to `docker-compose.yml` itself are also kept on `start` / `update` by
+default (only image, ports, and a few managed fields are synced).
+
+Rebuild policy is per instance:
+
+```bash
+# set at install (or re-run install with the flag to change it)
+hermes-manager install --rebuild-on-start /srv/hermes/main
+
+# one-shot force rebuild on this start only
+hermes-manager start --rebuild /srv/hermes/main
+```
+
+Without `--rebuild`, start follows `rebuild_compose_on_start` in
+`.manager/instance.json` (default: false = preserve custom compose edits).
+Full rewrite also happens on `install` repair.
 
 Hermes executables live in the image. **Update only recreates the container**
 (bind mounts stay). The manager never runs `docker compose down -v` and never

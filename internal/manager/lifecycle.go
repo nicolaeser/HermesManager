@@ -16,13 +16,19 @@ import (
 )
 
 type InstallOptions struct {
-	Name          string
-	Image         string
-	DashboardPort int
-	APIPort       int
-	BindAll       bool
-	Pull          bool
-	Start         bool
+	Name                     string
+	Image                    string
+	DashboardPort            int
+	APIPort                  int
+	BindAll                  bool
+	Pull                     bool
+	Start                    bool
+	RebuildComposeOnStart    bool
+	HasRebuildComposeOnStart bool
+}
+
+type StartOptions struct {
+	Rebuild bool
 }
 
 type InstallResult struct {
@@ -31,21 +37,22 @@ type InstallResult struct {
 }
 
 type Status struct {
-	Root          string
-	Name          string
-	Image         string
-	TrackedImage  string
-	DashboardURL  string
-	DashboardPort int
-	APIPort       int
-	BindAddress   string
-	Data          string
-	Workspace     string
-	Backups       string
-	Containers    string
-	Version       string
-	DashboardOK   bool
-	DashboardInfo string
+	Root                  string
+	Name                  string
+	Image                 string
+	TrackedImage          string
+	DashboardURL          string
+	DashboardPort         int
+	APIPort               int
+	BindAddress           string
+	RebuildComposeOnStart bool
+	Data                  string
+	Workspace             string
+	Backups               string
+	Containers            string
+	Version               string
+	DashboardOK           bool
+	DashboardInfo         string
 }
 
 type DashboardAccess struct {
@@ -79,6 +86,9 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		}
 		cfg = config.New(manager.Paths.Root, options.Name, options.Image, dashboardPort, apiPort)
 		cfg.BindAddress = bindAddress
+		if options.HasRebuildComposeOnStart {
+			cfg.RebuildComposeOnStart = options.RebuildComposeOnStart
+		}
 		if err := manager.ConfigStore.Save(cfg); err != nil {
 			return result, err
 		}
@@ -91,6 +101,9 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		if options.Name != "" || options.Image != "" || options.DashboardPort != 0 || options.APIPort != 0 || options.BindAll {
 			fmt.Fprintln(manager.Err, "note: install options are ignored for an existing instance; its name and ports remain stable")
 		}
+		if options.HasRebuildComposeOnStart {
+			cfg.RebuildComposeOnStart = options.RebuildComposeOnStart
+		}
 		if err := manager.ConfigStore.Save(cfg); err != nil {
 			return result, err
 		}
@@ -101,7 +114,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 	if err != nil {
 		return result, err
 	}
-	if err := manager.Generator.Prepare(cfg, values); err != nil {
+	if err := manager.Generator.Prepare(cfg, values, true); err != nil {
 		return result, err
 	}
 	manager.progress("Checking Docker CLI and Compose file")
@@ -140,12 +153,26 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 	return InstallResult{Config: cfg, Created: created}, nil
 }
 
-func (manager *Manager) Start(ctx context.Context) (operationErr error) {
+func (manager *Manager) Start(ctx context.Context, options StartOptions) (operationErr error) {
 	if err := manager.RequireInstalled(); err != nil {
 		return err
 	}
-	if err := manager.Prepare(ctx, true); err != nil {
+	cfg, values, err := manager.Load()
+	if err != nil {
 		return err
+	}
+	force := options.Rebuild || cfg.RebuildComposeOnStart
+	if force {
+		manager.progress("Rebuilding docker-compose.yml from managed template")
+	}
+	if err := manager.Generator.Prepare(cfg, values, force); err != nil {
+		return err
+	}
+	if err := manager.Docker.CheckCLI(ctx); err != nil {
+		return err
+	}
+	if err := manager.Docker.ValidateCompose(ctx); err != nil {
+		return fmt.Errorf("validate generated Compose configuration: %w", err)
 	}
 	if err := manager.Docker.CheckDaemon(ctx); err != nil {
 		return err
@@ -158,7 +185,7 @@ func (manager *Manager) Start(ctx context.Context) (operationErr error) {
 	if err := manager.Docker.Compose(ctx, false, "up", "-d", "hermes"); err != nil {
 		return err
 	}
-	_ = manager.StateStore.Log("start", "result=success")
+	_ = manager.StateStore.Log("start", fmt.Sprintf("rebuild=%t result=success", force))
 	return nil
 }
 
@@ -209,17 +236,18 @@ func (manager *Manager) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	status := Status{
-		Root:          manager.Paths.Root,
-		Name:          cfg.Name,
-		Image:         cfg.EffectiveImage(),
-		TrackedImage:  cfg.Image,
-		DashboardURL:  fmt.Sprintf("http://127.0.0.1:%d", cfg.DashboardPort),
-		DashboardPort: cfg.DashboardPort,
-		APIPort:       cfg.APIPort,
-		BindAddress:   cfg.BindAddress,
-		Data:          manager.Paths.Data,
-		Workspace:     manager.Paths.Workspace,
-		Backups:       manager.Paths.Backups,
+		Root:                  manager.Paths.Root,
+		Name:                  cfg.Name,
+		Image:                 cfg.EffectiveImage(),
+		TrackedImage:          cfg.Image,
+		DashboardURL:          fmt.Sprintf("http://127.0.0.1:%d", cfg.DashboardPort),
+		DashboardPort:         cfg.DashboardPort,
+		APIPort:               cfg.APIPort,
+		BindAddress:           cfg.BindAddress,
+		RebuildComposeOnStart: cfg.RebuildComposeOnStart,
+		Data:                  manager.Paths.Data,
+		Workspace:             manager.Paths.Workspace,
+		Backups:               manager.Paths.Backups,
 	}
 	if err := manager.Docker.CheckDaemon(ctx); err != nil {
 		status.Containers = "Docker unavailable: " + err.Error()
