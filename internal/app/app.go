@@ -191,7 +191,7 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 		terminal.Success("Hermes installed and started")
 	case result.Created:
 		terminal.Success("Hermes installed (not started)")
-		terminal.Info("Adjust compose.yaml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
+		terminal.Info("Adjust docker-compose.yml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
 	case start:
 		terminal.Success("Hermes installation repaired and started")
 	default:

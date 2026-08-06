@@ -149,11 +149,21 @@ func (client Client) ExecOutput(ctx context.Context, hermesArgs ...string) (stri
 	return client.ComposeOutput(ctx, args...)
 }
 
+func (client Client) composeFile() string {
+	if fsutil.FileExists(client.Paths.Compose) {
+		return client.Paths.Compose
+	}
+	if fsutil.FileExists(client.Paths.LegacyCompose()) {
+		return client.Paths.LegacyCompose()
+	}
+	return client.Paths.Compose
+}
+
 func (client Client) composeArguments(args ...string) []string {
 	base := []string{
 		"compose",
 		"--project-directory", client.Paths.Root,
-		"-f", client.Paths.Compose,
+		"-f", client.composeFile(),
 	}
 	return append(base, args...)
 }
@@ -172,8 +182,8 @@ func (client Client) capture(ctx context.Context, name string, args ...string) (
 }
 
 func (client Client) IsInstalled() bool {
-	return fsutil.FileExists(client.Paths.Compose) &&
-		fsutil.FileExists(client.Paths.Config)
+	composePresent := fsutil.FileExists(client.Paths.Compose) || fsutil.FileExists(client.Paths.LegacyCompose())
+	return composePresent && fsutil.FileExists(client.Paths.Config)
 }
 
 func (client Client) RedactedCompose(ctx context.Context, sensitiveValues ...string) (string, error) {

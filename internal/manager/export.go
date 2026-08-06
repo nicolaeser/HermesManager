@@ -117,7 +117,7 @@ Contents:
 - hermes/ contains a complete Hermes backup for hermes-manager restore.
 - workspace/ contains the host workspace when requested.
 - .manager/ contains identity, credentials, state, and operation history.
-- generated/compose.yaml is included for auditing only. Regenerate Compose on
+- generated/docker-compose.yml is included for auditing only. Regenerate Compose on
   the recovery host because its absolute bind-mount paths belong to the old host.
 `
 	if err := addBytesToZip(archive, "RECOVERY.txt", []byte(recoveryGuide), 0o600); err != nil {
@@ -133,7 +133,7 @@ Contents:
 		{paths.Secrets, ".manager/secrets.env", true},
 		{paths.State, ".manager/state.json", false},
 		{paths.OperationsLog, ".manager/operations.log", false},
-		{paths.Compose, "generated/compose.yaml", true},
+		{paths.Compose, "generated/docker-compose.yml", true},
 		{hermesBackup, "hermes/" + filepath.Base(hermesBackup), true},
 	} {
 		if err := addFileToZip(archive, item.source, item.name); err != nil {

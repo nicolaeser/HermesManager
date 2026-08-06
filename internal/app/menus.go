@@ -58,7 +58,7 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 				rt.ui.Success("Hermes installed and started")
 			} else {
 				rt.ui.Success("Hermes installed (not started)")
-				rt.ui.Info("Adjust compose.yaml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
+				rt.ui.Info("Adjust docker-compose.yml or migrate data if needed, then run: hermes-manager start %q", rt.paths.Root)
 			}
 			rt.printInstallSummary(result.Config)
 			return nil

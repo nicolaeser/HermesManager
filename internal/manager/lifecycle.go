@@ -65,7 +65,7 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 	var cfg config.Config
 	created := !manager.ConfigStore.Exists()
 	if created {
-		if fsutil.FileExists(manager.Paths.Compose) {
+		if fsutil.FileExists(manager.Paths.Compose) || fsutil.FileExists(manager.Paths.LegacyCompose()) {
 			return result, fmt.Errorf("%s already exists but is not owned by Hermes Manager", manager.Paths.Compose)
 		}
 		manager.progress("Creating instance metadata and selecting free ports")

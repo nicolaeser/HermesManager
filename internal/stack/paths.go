@@ -31,24 +31,23 @@ func NewPaths(root string) (Paths, error) {
 	manager := filepath.Join(absolute, ".manager")
 	return Paths{
 		Root:          absolute,
-		Compose:       filepath.Join(absolute, "compose.yaml"),
+		Compose:       filepath.Join(absolute, "docker-compose.yml"),
 		Manager:       manager,
 		Config:        filepath.Join(manager, "instance.json"),
 		Secrets:       filepath.Join(manager, "secrets.env"),
 		State:         filepath.Join(manager, "state.json"),
 		OperationsLog: filepath.Join(manager, "operations.log"),
 		Lock:          filepath.Join(manager, "operation.lock"),
-		// Data is the only critical Hermes persistence root (HERMES_HOME → /opt/data).
-		// Official Hermes stores config, sessions, memories, and data/workspace here.
-		Data: filepath.Join(absolute, "data"),
-		// Workspace is an optional host project directory mounted at /workspace.
-		// It is NOT Hermes Agent core state; see data/workspace for that.
-		Workspace: filepath.Join(absolute, "workspace"),
-		Backups:   filepath.Join(absolute, "backups"),
+		Data:          filepath.Join(absolute, "data"),
+		Workspace:     filepath.Join(absolute, "workspace"),
+		Backups:       filepath.Join(absolute, "backups"),
 	}, nil
 }
 
-// HermesDataWorkspace is the official Hermes Agent workspace under HERMES_HOME.
+func (p Paths) LegacyCompose() string {
+	return filepath.Join(p.Root, "compose.yaml")
+}
+
 func (p Paths) HermesDataWorkspace() string {
 	return filepath.Join(p.Data, "workspace")
 }

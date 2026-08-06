@@ -191,13 +191,17 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 	checkPrivateMode(&report, "Metadata permissions", manager.Paths.Config, 0o600)
 	checkPrivateMode(&report, "Credential permissions", manager.Paths.Secrets, 0o600)
 
-	composeContent, err := os.ReadFile(manager.Paths.Compose)
+	composePath := manager.Paths.Compose
+	if _, err := os.Stat(composePath); err != nil {
+		composePath = manager.Paths.LegacyCompose()
+	}
+	composeContent, err := os.ReadFile(composePath)
 	if err != nil {
 		report.add(CheckFail, "Compose mount policy", err.Error())
 	} else {
 		composeText := string(composeContent)
-		required := []string{`target: "/opt/data"`, `target: "/workspace"`, `target: "/backups"`}
-		safe := strings.Count(composeText, "      - type: bind") == 3
+		required := []string{"./data:/opt/data", "./workspace:/workspace", "./backups:/backups"}
+		safe := true
 		for _, value := range required {
 			safe = safe && strings.Count(composeText, value) == 1
 		}
@@ -205,7 +209,7 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 			safe = safe && !strings.Contains(composeText, forbidden)
 		}
 		if safe {
-			report.add(CheckPass, "Compose mount policy", "bind mounts only: data→/opt/data, workspace→/workspace, backups→/backups")
+			report.add(CheckPass, "Compose mount policy", "bind mounts only: ./data:/opt/data, ./workspace:/workspace, ./backups:/backups")
 		} else {
 			report.add(CheckFail, "Compose mount policy", "generated file does not match the three-mount safety contract; run install to repair")
 		}

@@ -70,7 +70,7 @@ Run `hermes-manager help` for the complete command list.
 
 ```text
 /srv/hermes/main/
-├── compose.yaml
+├── docker-compose.yml
 ├── .manager/
 ├── data/                 # HERMES_HOME → /opt/data (critical)
 │   └── workspace/        # created by Hermes Agent itself
