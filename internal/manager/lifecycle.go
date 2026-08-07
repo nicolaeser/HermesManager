@@ -84,6 +84,11 @@ func (manager *Manager) Install(ctx context.Context, options InstallOptions) (re
 		if err != nil {
 			return result, err
 		}
+		if options.DashboardPort == 0 || options.APIPort == 0 {
+			manager.progress("Selected free host ports: dashboard %d, API %d (bind %s)", dashboardPort, apiPort, bindAddress)
+		} else {
+			manager.progress("Using requested host ports: dashboard %d, API %d (bind %s)", dashboardPort, apiPort, bindAddress)
+		}
 		cfg = config.New(manager.Paths.Root, options.Name, options.Image, dashboardPort, apiPort)
 		cfg.BindAddress = bindAddress
 		if options.HasRebuildComposeOnStart {

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/nicolaeser/HermesManager/internal/command"
 	"github.com/nicolaeser/HermesManager/internal/config"
 	"github.com/nicolaeser/HermesManager/internal/manager"
+	"github.com/nicolaeser/HermesManager/internal/ports"
 	"github.com/nicolaeser/HermesManager/internal/ui"
 )
 
@@ -42,6 +44,24 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		if !installNow {
 			return nil
 		}
+		bindAll, err := rt.ui.Confirm("Publish dashboard/API on every interface (0.0.0.0)? Default is localhost-only.", false)
+		if err != nil {
+			return err
+		}
+		bindAddress := config.DefaultBindAddress
+		if bindAll {
+			if err := rt.ui.RequirePhrase(
+				"Publishing on 0.0.0.0 exposes the dashboard and API on every interface. Protect with firewall/VPN/proxy.",
+				"BIND-ALL",
+			); err != nil {
+				return err
+			}
+			bindAddress = config.PublicBindAddress
+		}
+		dashboardPort, apiPort, err := rt.promptInstallPorts(bindAddress)
+		if err != nil {
+			return err
+		}
 		rebuildOnStart, err := rt.ui.Confirm("Rebuild docker-compose.yml on every start?", false)
 		if err != nil {
 			return err
@@ -52,6 +72,9 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		}
 		err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
 			result, installErr := rt.manager.Install(opCtx, manager.InstallOptions{
+				DashboardPort:            dashboardPort,
+				APIPort:                  apiPort,
+				BindAll:                  bindAll,
 				Pull:                     true,
 				Start:                    startNow,
 				RebuildComposeOnStart:    rebuildOnStart,
@@ -384,4 +407,50 @@ func (rt runtime) printInstallSummary(cfg config.Config) {
 	rt.ui.Info("Hermes Agent state lives under data/. The host workspace/ folder is optional project files.")
 	rt.ui.Info("Run 'hermes-manager dashboard %q' to show the generated login.", rt.paths.Root)
 	rt.ui.Info("Force a one-shot compose rebuild with: hermes-manager start --rebuild %q", rt.paths.Root)
+}
+
+func (rt runtime) promptInstallPorts(bindAddress string) (dashboardPort, apiPort int, err error) {
+	suggestedDashboard, suggestedAPI, err := ports.Suggest(rt.paths.Root, bindAddress)
+	if err != nil {
+		return 0, 0, fmt.Errorf("detect free ports: %w", err)
+	}
+	if reserved := ports.ReservedBySiblings(rt.paths.Root); len(reserved) > 0 {
+		rt.ui.Info("Detected %d port(s) reserved by other Hermes instances under %s", len(reserved), filepath.Dir(rt.paths.Root))
+	}
+	rt.ui.Section("Host ports")
+	rt.ui.Info("Defaults avoid ports already used on this host and ports reserved by sibling Hermes installs.")
+	rt.ui.KeyValue("Suggested dashboard", suggestedDashboard)
+	rt.ui.KeyValue("Suggested API", suggestedAPI)
+
+	useAutomatic, err := rt.ui.Confirm("Use these free ports automatically?", true)
+	if err != nil {
+		return 0, 0, err
+	}
+	if useAutomatic {
+		return 0, 0, nil
+	}
+
+	for {
+		dashboardPort, err = rt.ui.PromptInt("Dashboard host port", suggestedDashboard)
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := ports.Check(rt.paths.Root, bindAddress, dashboardPort, nil); err != nil {
+			rt.ui.Failure("%v", err)
+			continue
+		}
+		break
+	}
+	for {
+		apiPort, err = rt.ui.PromptInt("API host port", suggestedAPI)
+		if err != nil {
+			return 0, 0, err
+		}
+		if err := ports.Check(rt.paths.Root, bindAddress, apiPort, map[int]bool{dashboardPort: true}); err != nil {
+			rt.ui.Failure("%v", err)
+			continue
+		}
+		break
+	}
+	return dashboardPort, apiPort, nil
 }

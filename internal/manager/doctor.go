@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nicolaeser/HermesManager/internal/config"
+	"github.com/nicolaeser/HermesManager/internal/ports"
 	"github.com/nicolaeser/HermesManager/internal/secrets"
 )
 
@@ -138,6 +139,13 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 	} else {
 		report.add(CheckPass, "Network exposure", "dashboard and API are localhost-only")
 	}
+	if conflicts := ports.Conflicts(manager.Paths.Root, cfg.BindAddress, cfg.DashboardPort, cfg.APIPort); len(conflicts) > 0 {
+		for _, detail := range conflicts {
+			report.add(CheckFail, "Port conflict", detail)
+		}
+	} else {
+		report.add(CheckPass, "Port uniqueness", fmt.Sprintf("dashboard %d and API %d are not reserved by sibling Hermes instances", cfg.DashboardPort, cfg.APIPort))
+	}
 
 	values, err := manager.SecretStore.Load()
 	if err != nil {
@@ -257,6 +265,17 @@ func (manager *Manager) Doctor(ctx context.Context) DoctorReport {
 	report.add(CheckPass, "Docker daemon", "available")
 	if !manager.Docker.ServiceRunning(ctx) {
 		report.add(CheckWarn, "Hermes container", "not running")
+		for _, item := range []struct {
+			port int
+			role string
+		}{
+			{cfg.DashboardPort, "dashboard"},
+			{cfg.APIPort, "API"},
+		} {
+			if !ports.Available(cfg.BindAddress, item.port) {
+				report.add(CheckWarn, "Port availability", fmt.Sprintf("%s port %d is already in use on %s; start may fail", item.role, item.port, cfg.BindAddress))
+			}
+		}
 		return report
 	}
 	report.add(CheckPass, "Hermes container", "running")

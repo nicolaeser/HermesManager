@@ -173,6 +173,9 @@ func (app *App) installCommand(ctx context.Context, terminal *ui.UI, args []stri
 	}
 	terminal.Info("Preparing Hermes instance at %s", rt.paths.Root)
 	terminal.Info("Hermes state will live under data/ (HERMES_HOME). Project workspace/ is optional.")
+	if *dashboardPort == 0 && *apiPort == 0 {
+		terminal.Info("Host ports are automatic: free ports are chosen, skipping live listeners and sibling Hermes reservations.")
+	}
 	if *bindAll {
 		terminal.Warn("Dashboard and API ports will listen on every host interface (0.0.0.0).")
 	}
@@ -449,12 +452,17 @@ Commands:
 Install options:
   --name NAME                    Override the derived instance name
   --image IMAGE                  Override the official image
-  --dashboard-port PORT          Host port; 0 chooses one automatically
-  --api-port PORT                Host port; 0 chooses one automatically
+  --dashboard-port PORT          Host port; 0 auto-detects a free port
+  --api-port PORT                Host port; 0 auto-detects a free port
   --bind-all                     Explicitly publish ports on 0.0.0.0
   --no-pull                      Generate without pulling the image
   --no-start                     Generate without starting the container
   --rebuild-on-start             Rebuild docker-compose.yml on every start
+
+Port selection (new installs):
+  Automatic mode avoids ports already listening and ports reserved by sibling
+  Hermes Manager instances under the same parent folder. Interactive menu
+  install offers detected free ports and lets you override them.
 
 Start options:
   --rebuild                      Force-regenerate docker-compose.yml this start

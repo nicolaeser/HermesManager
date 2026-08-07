@@ -46,7 +46,11 @@ listen on `0.0.0.0`:
 hermes-manager install --bind-all --dashboard-port 9120 --api-port 8650 /srv/hermes/main
 ```
 
-Use a separate folder and different ports for every additional instance.
+Use a separate folder for every additional instance. Host ports are chosen
+automatically on new installs: the manager skips ports already listening and
+ports reserved by sibling Hermes Manager instances under the same parent
+folder. Omit `--dashboard-port` / `--api-port` (or pass `0`) for auto-detect.
+Interactive `menu` install shows suggested free ports and lets you override.
 
 ## Common commands
 
