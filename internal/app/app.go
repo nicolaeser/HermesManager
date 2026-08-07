@@ -68,7 +68,7 @@ func (app *App) Run(ctx context.Context, args []string) error {
 	}
 	terminal := ui.New(app.In, app.Out, app.Err, color, *assumeYes)
 	switch commandName {
-	case "menu", "help", "--help", "-h", "version":
+	case "menu", "help", "--help", "-h", "version", "shell":
 		return app.dispatch(ctx, terminal, commandName, remaining)
 	default:
 		cmdCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -140,6 +140,8 @@ func (app *App) dispatch(ctx context.Context, terminal *ui.UI, commandName strin
 		return app.exportInstanceCommand(ctx, terminal, args)
 	case "logs":
 		return app.logsCommand(ctx, terminal, args)
+	case "shell":
+		return app.shellCommand(ctx, terminal, args)
 	case "backup":
 		return app.backupCommand(ctx, terminal, args)
 	case "restore":
@@ -230,6 +232,27 @@ func (app *App) logsCommand(ctx context.Context, terminal *ui.UI, args []string)
 		return err
 	}
 	return rt.manager.Logs(ctx, *tail)
+}
+
+func (app *App) shellCommand(ctx context.Context, terminal *ui.UI, args []string) error {
+	folderArgs := args
+	commandArgs := []string(nil)
+	for i, arg := range args {
+		if arg == "--" {
+			folderArgs = args[:i]
+			commandArgs = args[i+1:]
+			break
+		}
+	}
+	root, err := oneFolder(folderArgs)
+	if err != nil {
+		return fmt.Errorf("usage: hermes-manager shell [FOLDER] [-- COMMAND...]")
+	}
+	rt, err := app.runtime(root, terminal)
+	if err != nil {
+		return err
+	}
+	return rt.manager.Shell(ctx, commandArgs...)
 }
 
 func (app *App) backupCommand(ctx context.Context, terminal *ui.UI, args []string) error {
@@ -432,6 +455,7 @@ Commands:
   restart [folder]               Restart the container
   status [folder]                Show ports, paths, image, and container state
   logs [--tail N] [folder]       Follow container logs
+  shell [folder] [-- COMMAND...] Interactive shell inside the Hermes container
   dashboard [folder]             Show dashboard URL and login
   dashboard reset-password [folder]
                                  Rotate password and invalidate sessions
@@ -474,6 +498,8 @@ Examples:
   hermes-manager start --rebuild /srv/hermes/work
   hermes-manager install --dashboard-port 9120 /srv/hermes/second
   cd /srv/hermes/work && hermes-manager dashboard
+  hermes-manager shell /srv/hermes/work
+  hermes-manager shell /srv/hermes/work -- sh
   hermes-manager update /srv/hermes/work
   hermes-manager self-update
 

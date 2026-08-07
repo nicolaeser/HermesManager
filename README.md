@@ -60,6 +60,8 @@ hermes-manager stop /srv/hermes/main
 hermes-manager restart /srv/hermes/main
 hermes-manager status /srv/hermes/main
 hermes-manager logs /srv/hermes/main
+hermes-manager shell /srv/hermes/main
+hermes-manager shell /srv/hermes/main -- sh
 hermes-manager backup /srv/hermes/main
 hermes-manager update /srv/hermes/main
 hermes-manager rollback /srv/hermes/main

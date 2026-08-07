@@ -105,12 +105,13 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 			{Key: "3", Label: "Restart"},
 			{Key: "4", Label: "Status", Description: "Show image, ports, paths, and container state"},
 			{Key: "5", Label: "Logs", Description: "Follow the latest container output"},
-			{Key: "6", Label: "Dashboard access", Description: "Show local URL and generated login"},
-			{Key: "7", Label: "Backup", Description: "Create and verify a full Hermes archive"},
-			{Key: "8", Label: "Restore", Description: "Make a safety backup, then restore an archive"},
-			{Key: "9", Label: "Update", Description: "Backup, pull, recreate, verify, auto-rollback"},
-			{Key: "10", Label: "Rollback", Description: "Use the previously recorded image"},
-			{Key: "11", Label: "Safety and maintenance", Description: "Doctor, password reset, retention, export, and repair"},
+			{Key: "6", Label: "Shell", Description: "Interactive bash inside the Hermes container"},
+			{Key: "7", Label: "Dashboard access", Description: "Show local URL and generated login"},
+			{Key: "8", Label: "Backup", Description: "Create and verify a full Hermes archive"},
+			{Key: "9", Label: "Restore", Description: "Make a safety backup, then restore an archive"},
+			{Key: "10", Label: "Update", Description: "Backup, pull, recreate, verify, auto-rollback"},
+			{Key: "11", Label: "Rollback", Description: "Use the previously recorded image"},
+			{Key: "12", Label: "Safety and maintenance", Description: "Doctor, password reset, retention, export, and repair"},
 			{Key: "0", Label: "Exit"},
 		})
 		if err != nil {
@@ -135,21 +136,23 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		case "5":
 			err = rt.manager.Logs(ctx, 100)
 		case "6":
-			err = rt.dashboardCommand()
+			err = rt.manager.Shell(ctx)
 		case "7":
-			err = rt.withInterrupt(ctx, rt.menuBackup)
+			err = rt.dashboardCommand()
 		case "8":
-			err = rt.withInterrupt(ctx, rt.menuRestore)
+			err = rt.withInterrupt(ctx, rt.menuBackup)
 		case "9":
-			err = rt.withInterrupt(ctx, rt.menuUpdate)
+			err = rt.withInterrupt(ctx, rt.menuRestore)
 		case "10":
+			err = rt.withInterrupt(ctx, rt.menuUpdate)
+		case "11":
 			err = rt.ui.RequirePhrase("Rollback recreates Hermes with the previous image.", "ROLLBACK")
 			if err == nil {
 				err = rt.withInterrupt(ctx, func(opCtx context.Context) error {
 					return rt.withSuccess("Previous image restored", rt.manager.Rollback(opCtx))
 				})
 			}
-		case "11":
+		case "12":
 			err = rt.safetyMenu(ctx)
 		case "0":
 			return nil
@@ -159,7 +162,7 @@ func (rt runtime) mainMenu(ctx context.Context) error {
 		if err != nil {
 			rt.ui.Failure("%v", err)
 		}
-		if choice != "5" {
+		if choice != "5" && choice != "6" {
 			rt.ui.Pause()
 		}
 	}

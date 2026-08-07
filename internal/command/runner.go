@@ -16,14 +16,15 @@ import (
 var ErrInterrupted = errors.New("interrupted")
 
 type Request struct {
-	Name        string
-	Args        []string
-	Directory   string
-	Environment []string
-	Stdin       io.Reader
-	Stdout      io.Writer
-	Stderr      io.Writer
-	Capture     bool
+	Name           string
+	Args           []string
+	Directory      string
+	Environment    []string
+	Stdin          io.Reader
+	Stdout         io.Writer
+	Stderr         io.Writer
+	Capture        bool
+	InheritSignals bool
 }
 
 type Result struct {
@@ -47,7 +48,9 @@ func (OSRunner) Run(ctx context.Context, request Request) (Result, error) {
 	}
 	cmd := exec.Command(executable, request.Args...)
 	cmd.Dir = request.Directory
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if !request.InheritSignals {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
 	if len(request.Environment) > 0 {
 		cmd.Env = append(os.Environ(), request.Environment...)
 	}
@@ -86,13 +89,25 @@ func (OSRunner) Run(ctx context.Context, request Request) (Result, error) {
 	select {
 	case runErr = <-waitDone:
 	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+		if request.InheritSignals {
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+			}
+		} else {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+		}
 		timer := time.NewTimer(3 * time.Second)
 		select {
 		case runErr = <-waitDone:
 			timer.Stop()
 		case <-timer.C:
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if request.InheritSignals {
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+			} else {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
 			runErr = <-waitDone
 		}
 		if ctx.Err() != nil {

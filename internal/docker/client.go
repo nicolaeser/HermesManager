@@ -143,6 +143,25 @@ func (client Client) Exec(ctx context.Context, interactive bool, hermesArgs ...s
 	return client.Compose(ctx, interactive, args...)
 }
 
+func (client Client) Shell(ctx context.Context, shellCommand ...string) error {
+	if len(shellCommand) == 0 {
+		shellCommand = []string{"bash"}
+	}
+	args := client.composeArguments(append([]string{"exec", "hermes"}, shellCommand...)...)
+	request := command.Request{
+		Name:           "docker",
+		Args:           args,
+		Directory:      client.Paths.Root,
+		Stdin:          client.In,
+		Stdout:         client.Out,
+		Stderr:         client.Err,
+		Capture:        false,
+		InheritSignals: true,
+	}
+	_, err := client.Runner.Run(ctx, request)
+	return err
+}
+
 func (client Client) ExecOutput(ctx context.Context, hermesArgs ...string) (string, error) {
 	args := []string{"exec", "-T", "hermes", "hermes"}
 	args = append(args, hermesArgs...)

@@ -304,6 +304,29 @@ func (manager *Manager) Logs(ctx context.Context, tail int) error {
 	return err
 }
 
+func (manager *Manager) Shell(ctx context.Context, commandArgs ...string) error {
+	if err := manager.RequireInstalled(); err != nil {
+		return err
+	}
+	if err := manager.Docker.CheckDaemon(ctx); err != nil {
+		return err
+	}
+	running, err := manager.Docker.ServiceRunningStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if !running {
+		return fmt.Errorf("Hermes container is not running; start it first: hermes-manager start %q", manager.Paths.Root)
+	}
+	signal.Ignore(os.Interrupt)
+	defer signal.Reset(os.Interrupt)
+	err = manager.Docker.Shell(ctx, commandArgs...)
+	if command.IsInterrupted(err) {
+		return nil
+	}
+	return err
+}
+
 func (manager *Manager) IsInstalled() bool {
 	return manager.Docker.IsInstalled()
 }
